@@ -30,4 +30,4 @@ app.get('/stripe/metrics', async (req, res) => {
 // Add similar routes for /mycase/metrics, /lawpay/metrics, and /appcoll/metrics
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));server
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
