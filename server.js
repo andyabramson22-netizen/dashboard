@@ -150,11 +150,11 @@ app.get('/stripe/metrics', async (_req, res) => {
   if (!secretKey) return res.json({ volume: 0, currency: 'USD', paymentCount: 0, connected: false, reason: 'missing_credentials' });
   try {
     const headers = { Authorization: `Bearer ${secretKey}` };
-    const paymentIntents = await listAllStripeResources('payment_intents', headers);
-    const successfulPayments = paymentIntents.filter((payment) => payment.status === 'succeeded');
+    const charges = await listAllStripeResources('charges', headers);
+    const successfulPayments = charges.filter((payment) => payment.status === 'succeeded' && payment.paid);
     const totalsByCurrency = successfulPayments.reduce((totals, payment) => {
       const currency = String(payment.currency || 'usd').toUpperCase();
-      totals[currency] = (totals[currency] || 0) + (payment.amount_received || 0);
+      totals[currency] = (totals[currency] || 0) + (payment.amount || 0);
       return totals;
     }, {});
     const currency = totalsByCurrency.USD !== undefined
