@@ -5,122 +5,80 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const getAuthToken = (req) => {
-  const authHeader = req.headers.authorization || '';
-  return authHeader.replace('Bearer ', '').trim();
+const requestJson = async (url, options = {}) => {
+  const response = await fetch(url, options);
+  const body = await response.text();
+  if (!response.ok) throw new Error(`Upstream request failed (${response.status}): ${body.slice(0, 200)}`);
+  return body ? JSON.parse(body) : {};
 };
 
-// --- GO PLUS ---
-app.get('/goplus/metrics', async (req, res) => {
-  const apiKey = getAuthToken(req);
+app.get('/health', (_req, res) => {
+  res.json({ ok: true, service: 'patent-profiler-dashboard', time: new Date().toISOString() });
+});
+
+app.get('/goplus/metrics', async (_req, res) => {
+  const token = process.env.GOPLUS_API_TOKEN;
+  const locationId = process.env.GOPLUS_LOCATION_ID;
+  if (!token || !locationId) return res.json({ sales: [], clients: [], connected: false, reason: 'missing_credentials' });
   try {
-    const response = await fetch('https://services.leadconnectorhq.com/opportunities/search', {
+    const base = (process.env.GOPLUS_API_BASE || 'https://services.leadconnectorhq.com').replace(/\/$/, '');
+    const data = await requestJson(`${base}/opportunities/search`, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Version': '2021-07-28',
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ limit: 100 })
+      headers: { Authorization: `Bearer ${token}`, Version: '2021-07-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ location_id: locationId, limit: 100 })
     });
-    const data = await response.json();
-    res.json({ sales: data.opportunities || [], clients: [] }); 
+    res.json({ sales: data.opportunities || [], clients: [], connected: true });
   } catch (error) {
-    res.status(500).json({ error: "Failed to fetch Go Plus data" });
+    res.status(502).json({ error: 'Failed to fetch Go Plus data', detail: error.message });
   }
 });
 
-// --- STRIPE ---
-app.get('/stripe/metrics', async (req, res) => {
-  const secretKey = getAuthToken(req);
+app.get('/stripe/metrics', async (_req, res) => {
+  const secretKey = process.env.STRIPE_SECRET_KEY;
+  if (!secretKey) return res.json({ metrics: [], clients: [], payments: [], connected: false, reason: 'missing_credentials' });
   try {
-    const custRes = await fetch('https://api.stripe.com/v1/customers?limit=20', { headers: { Authorization: `Bearer ${secretKey}` } });
-    const custData = await custRes.json();
-
-    const subRes = await fetch('https://api.stripe.com/v1/subscriptions?limit=20', { headers: { Authorization: `Bearer ${secretKey}` } });
-    const subData = await subRes.json();
-
-    const chargeRes = await fetch('https://api.stripe.com/v1/charges?limit=20', { headers: { Authorization: `Bearer ${secretKey}` } });
-    const chargeData = await chargeRes.json();
-
-    const clients = (custData.data || []).map(c => {
-      const hasSub = (subData.data || []).some(sub => sub.customer === c.id && sub.status === 'active');
-      return {
-        id: c.id,
-        name: c.name || c.email || 'Unknown',
-        email: c.email || 'No email',
-        status: hasSub ? 'active' : 'inactive',
-        spent: 0 
-      };
-    });
-
-    const payments = (chargeData.data || []).map(p => ({
-      id: p.id,
-      amount: p.amount / 100,
-      status: p.status,
-      date: new Date(p.created * 1000).toISOString(),
-      clientName: p.billing_details?.name || p.billing_details?.email || 'Unknown'
+    const headers = { Authorization: `Bearer ${secretKey}` };
+    const [custData, chargeData] = await Promise.all([
+      requestJson('https://api.stripe.com/v1/customers?limit=100', { headers }),
+      requestJson('https://api.stripe.com/v1/charges?limit=100', { headers })
+    ]);
+    const clients = (custData.data || []).map((customer) => ({
+      id: customer.id,
+      name: customer.name || customer.email || 'Unknown',
+      email: customer.email || 'No email',
+      status: 'active',
+      spent: 0
     }));
-
-    res.json({ metrics: [], clients, payments });
-  } catch (error) {
-    res.status(500).json({ error: "Failed to fetch Stripe data" });
-  }
-});
-
-// --- MYCASE ---
-app.get('/mycase/metrics', async (req, res) => {
-  const token = getAuthToken(req);
-  try {
-    const response = await fetch('https://api.mycase.com/v1/cases', { 
-      headers: { Authorization: `Bearer ${token}` } 
-    });
-    const data = await response.json();
-    res.json(data.cases || []); 
-  } catch (error) {
-    res.status(500).json({ error: "Failed to fetch MyCase data" });
-  }
-});
-
-// --- LAWPAY (via AffiniPay) ---
-app.get('/lawpay/metrics', async (req, res) => {
-  const secretKey = getAuthToken(req);
-  try {
-    // LawPay uses Basic Auth with the secret key
-    const authHeader = `Basic ${Buffer.from(secretKey + ':').toString('base64')}`;
-    const response = await fetch('https://api.affinipay.com/v1/charges', { 
-      headers: { Authorization: authHeader } 
-    });
-    const data = await response.json();
-    
-    const transactions = (data.data || []).map(t => ({
-      id: t.id,
-      amount: t.amount,
-      status: t.status,
-      date: t.created_at,
-      clientName: t.name || 'Unknown'
+    const payments = (chargeData.data || []).map((charge) => ({
+      id: charge.id,
+      amount: charge.amount / 100,
+      status: charge.status,
+      date: new Date(charge.created * 1000).toISOString(),
+      clientName: charge.billing_details?.name || charge.billing_details?.email || 'Unknown'
     }));
-
-    res.json({ revenue: 0, transactions });
+    res.json({ metrics: [], clients, payments, connected: true, updatedAt: new Date().toISOString() });
   } catch (error) {
-    res.status(500).json({ error: "Failed to fetch LawPay data" });
+    res.status(502).json({ error: 'Failed to fetch Stripe data', detail: error.message });
   }
 });
 
-// --- APPCOLL ---
-app.get('/appcoll/metrics', async (req, res) => {
-  const apiKey = getAuthToken(req);
+app.get('/lawpay/metrics', (_req, res) => {
+  res.json({ revenue: 0, transactions: [], connected: false, reason: 'not_configured' });
+});
+
+app.get('/appcoll/metrics', async (_req, res) => {
+  const apiKey = process.env.APPCOLL_API_KEY;
+  const base = (process.env.APPCOLL_API_BASE || 'https://pm.appcoll.com/api/v1').replace(/\/$/, '');
+  if (!apiKey) return res.json({ matters: [], connected: false, reason: 'missing_credentials' });
   try {
-    const response = await fetch('https://pm.appcoll.com/api/v1/matters', { 
-      headers: { Authorization: `Bearer ${apiKey}` } 
+    const data = await requestJson(`${base}/matters`, {
+      headers: { Accept: 'application/json', Authorization: `Bearer ${apiKey}`, 'X-API-Key': apiKey }
     });
-    const data = await response.json();
-    res.json({ matters: data.Matters || [] });
+    res.json({ matters: data.Matters || data.matters || data.data || [], connected: true, updatedAt: new Date().toISOString() });
   } catch (error) {
-    res.status(500).json({ error: "Failed to fetch AppColl data" });
+    res.status(502).json({ error: 'Failed to fetch AppColl data', detail: error.message });
   }
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
-
