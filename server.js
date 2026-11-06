@@ -108,6 +108,22 @@ const requestJson = async (url, options = {}) => {
   return body ? JSON.parse(body) : {};
 };
 
+const listAllStripeResources = async (resource, headers) => {
+  const records = [];
+  let startingAfter = null;
+  do {
+    const query = new URLSearchParams({ limit: '100' });
+    if (startingAfter) query.set('starting_after', startingAfter);
+    const page = await requestJson(`https://api.stripe.com/v1/${resource}?${query}`, { headers });
+    const pageRecords = page.data || [];
+    records.push(...pageRecords);
+    startingAfter = page.has_more && pageRecords.length
+      ? pageRecords[pageRecords.length - 1].id
+      : null;
+  } while (startingAfter);
+  return records;
+};
+
 app.get('/health', (_req, res) => {
   res.json({ ok: true, service: 'patent-profiler-dashboard', time: new Date().toISOString() });
 });
@@ -131,28 +147,26 @@ app.get('/goplus/metrics', async (_req, res) => {
 
 app.get('/stripe/metrics', async (_req, res) => {
   const secretKey = process.env.STRIPE_SECRET_KEY;
-  if (!secretKey) return res.json({ metrics: [], clients: [], payments: [], connected: false, reason: 'missing_credentials' });
+  if (!secretKey) return res.json({ volume: 0, currency: 'USD', paymentCount: 0, connected: false, reason: 'missing_credentials' });
   try {
     const headers = { Authorization: `Bearer ${secretKey}` };
-    const [custData, chargeData] = await Promise.all([
-      requestJson('https://api.stripe.com/v1/customers?limit=100', { headers }),
-      requestJson('https://api.stripe.com/v1/charges?limit=100', { headers })
-    ]);
-    const clients = (custData.data || []).map((customer) => ({
-      id: customer.id,
-      name: customer.name || customer.email || 'Unknown',
-      email: customer.email || 'No email',
-      status: 'active',
-      spent: 0
-    }));
-    const payments = (chargeData.data || []).map((charge) => ({
-      id: charge.id,
-      amount: charge.amount / 100,
-      status: charge.status,
-      date: new Date(charge.created * 1000).toISOString(),
-      clientName: charge.billing_details?.name || charge.billing_details?.email || 'Unknown'
-    }));
-    res.json({ metrics: [], clients, payments, connected: true, updatedAt: new Date().toISOString() });
+    const paymentIntents = await listAllStripeResources('payment_intents', headers);
+    const successfulPayments = paymentIntents.filter((payment) => payment.status === 'succeeded');
+    const totalsByCurrency = successfulPayments.reduce((totals, payment) => {
+      const currency = String(payment.currency || 'usd').toUpperCase();
+      totals[currency] = (totals[currency] || 0) + (payment.amount_received || 0);
+      return totals;
+    }, {});
+    const currency = totalsByCurrency.USD !== undefined
+      ? 'USD'
+      : Object.keys(totalsByCurrency)[0] || 'USD';
+    res.json({
+      volume: (totalsByCurrency[currency] || 0) / 100,
+      currency,
+      paymentCount: successfulPayments.filter((payment) => String(payment.currency || 'usd').toUpperCase() === currency).length,
+      connected: true,
+      updatedAt: new Date().toISOString()
+    });
   } catch (error) {
     res.status(502).json({ error: 'Failed to fetch Stripe data', detail: error.message });
   }
