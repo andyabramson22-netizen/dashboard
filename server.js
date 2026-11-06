@@ -160,10 +160,27 @@ app.get('/stripe/metrics', async (_req, res) => {
     const currency = totalsByCurrency.USD !== undefined
       ? 'USD'
       : Object.keys(totalsByCurrency)[0] || 'USD';
+    const currentYear = new Date().getUTCFullYear();
+    const currentCurrencyPayments = successfulPayments.filter(
+      (payment) => String(payment.currency || 'usd').toUpperCase() === currency
+    );
+    const currentYearPayments = currentCurrencyPayments.filter(
+      (payment) => new Date(payment.created * 1000).getUTCFullYear() === currentYear
+    );
+    const monthlySales = Array.from({ length: 12 }, (_, month) => ({
+      month: new Date(Date.UTC(currentYear, month, 1)).toLocaleString('en-US', { month: 'short', timeZone: 'UTC' }),
+      volume: currentYearPayments
+        .filter((payment) => new Date(payment.created * 1000).getUTCMonth() === month)
+        .reduce((sum, payment) => sum + (payment.amount || 0), 0) / 100
+    }));
     res.json({
       volume: (totalsByCurrency[currency] || 0) / 100,
       currency,
-      paymentCount: successfulPayments.filter((payment) => String(payment.currency || 'usd').toUpperCase() === currency).length,
+      paymentCount: currentCurrencyPayments.length,
+      currentYear,
+      currentYearVolume: currentYearPayments.reduce((sum, payment) => sum + (payment.amount || 0), 0) / 100,
+      currentYearPaymentCount: currentYearPayments.length,
+      monthlySales,
       connected: true,
       updatedAt: new Date().toISOString()
     });
