@@ -45,44 +45,47 @@ const pick = (row, names) => {
   return key ? row[key] : null;
 };
 
+const parseHours = (value) => {
+  if (value === null || value === undefined || value === '') return null;
+  const numeric = Number(String(value).replace(/[^0-9.-]/g, ''));
+  return Number.isFinite(numeric) && numeric >= 0 ? Math.round(numeric * 10) / 10 : null;
+};
+
 const summarizeAppCollCsv = (csv) => {
-  const staffRows = parseCsv(csv).filter((row) => {
-    const owner = String(pick(row, ['Owner', 'AssignedTo', 'Assigned To']) || '').trim();
-    return owner && owner.toLowerCase() !== 'tbd attorney';
+  const billingRows = parseCsv(csv).filter((row) => {
+    const owner = String(pick(row, ['Timekeeper', 'Person', 'Who', 'User', 'Owner']) || '').trim();
+    const hours = parseHours(pick(row, ['Hours', 'Quantity', 'Time', 'Duration', 'Billable Hours']));
+    return owner && owner.toLowerCase() !== 'tbd attorney' && hours !== null;
   });
-  const assignments = staffRows.map((row) => {
-    const openedAt = pick(row, ['OpenedOn', 'Opened On', 'Created', 'CreatedOn', 'RefDate']);
-    const closedAt = pick(row, ['ClosedOn', 'Closed On', 'CompletedOn', 'FinalizedOn']);
-    const start = Date.parse(openedAt);
-    const end = Date.parse(closedAt);
-    const turnaroundHours = Number.isFinite(start) && Number.isFinite(end) && end >= start
-      ? Math.round(((end - start) / 3600000) * 10) / 10
-      : null;
+  const assignments = billingRows.map((row) => {
+    const recordedHours = parseHours(pick(row, ['Hours', 'Quantity', 'Time', 'Duration', 'Billable Hours']));
     return {
-      id: pick(row, ['TaskID', 'Task ID', 'ID']),
-      type: pick(row, ['TaskType', 'Task Type', 'Type']),
-      status: pick(row, ['TaskStatus', 'Task Status', 'Status']),
-      owner: pick(row, ['Owner', 'AssignedTo', 'Assigned To']),
-      creator: pick(row, ['Creator', 'CreatedBy', 'Created By']),
-      openedAt,
+      id: pick(row, ['BillingItemID', 'Billing Item ID', 'ID']),
+      type: pick(row, ['Matter.Title', 'Matter Title', 'Matter', 'Project', 'Task', 'Description']) || 'Unassigned project',
+      status: pick(row, ['Status', 'Invoice Status']) || 'Recorded',
+      owner: pick(row, ['Timekeeper', 'Person', 'Who', 'User', 'Owner']),
+      creator: pick(row, ['CreatedBy', 'Created By', 'Creator']),
+      openedAt: pick(row, ['Date', 'Entry Date', 'Created', 'CreatedOn']),
       modifiedAt: pick(row, ['Modified', 'ModifiedOn', 'Modified On']),
-      closedAt,
-      respondBy: pick(row, ['RespondBy', 'Respond By']),
-      finalDueDate: pick(row, ['FinalDueDate', 'Final Due Date']),
-      turnaroundHours
+      closedAt: pick(row, ['Date', 'Entry Date', 'Created', 'CreatedOn']),
+      respondBy: null,
+      finalDueDate: null,
+      turnaroundHours: recordedHours,
+      recordedHours
     };
   });
-  const completed = assignments.filter((assignment) => assignment.turnaroundHours !== null);
+  const totalRecordedHours = assignments.reduce((sum, assignment) => sum + assignment.recordedHours, 0);
   return {
     matters: [],
     assignments,
     taskCount: assignments.length,
-    completedTaskCount: completed.length,
-    averageTurnaroundHours: completed.length
-      ? Math.round((completed.reduce((sum, assignment) => sum + assignment.turnaroundHours, 0) / completed.length) * 10) / 10
+    completedTaskCount: assignments.length,
+    averageTurnaroundHours: assignments.length
+      ? Math.round((totalRecordedHours / assignments.length) * 10) / 10
       : null,
+    totalRecordedHours: Math.round(totalRecordedHours * 10) / 10,
     connected: true,
-    source: 'scheduled_csv',
+    source: 'appcoll_billing_csv',
     updatedAt: new Date().toISOString()
   };
 };
