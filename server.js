@@ -46,7 +46,11 @@ const pick = (row, names) => {
 };
 
 const summarizeAppCollCsv = (csv) => {
-  const assignments = parseCsv(csv).map((row) => {
+  const staffRows = parseCsv(csv).filter((row) => {
+    const owner = String(pick(row, ['Owner', 'AssignedTo', 'Assigned To']) || '').trim();
+    return owner && owner.toLowerCase() !== 'tbd attorney';
+  });
+  const assignments = staffRows.map((row) => {
     const openedAt = pick(row, ['OpenedOn', 'Opened On', 'Created', 'CreatedOn', 'RefDate']);
     const closedAt = pick(row, ['ClosedOn', 'Closed On', 'CompletedOn', 'FinalizedOn']);
     const start = Date.parse(openedAt);
